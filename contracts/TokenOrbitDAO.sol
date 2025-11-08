@@ -1,11 +1,4 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-
-contract SimpleDAO {
-    address public owner;
-    uint256 public proposalCount;
-
-    // Struct to represent a proposal
+Struct to represent a proposal
     struct Proposal {
         uint256 id;
         address proposer;
@@ -17,37 +10,17 @@ contract SimpleDAO {
         mapping(address => bool) hasVoted;
     }
 
-    // Mapping from proposal ID to Proposal struct
-    mapping(uint256 => Proposal) private proposals;
-
-    // Member token balances
+    Member token balances
     mapping(address => uint256) public memberTokens;
 
-    // Membership status
-    mapping(address => bool) public members;
-
-    // Events
+    Events
     event TokensAllocated(address indexed member, uint256 tokens);
     event FundsDeposited(address indexed sender, uint256 amount);
     event ProposalCreated(uint256 indexed proposalId, address indexed proposer, string description, uint256 deadline);
     event Voted(uint256 indexed proposalId, address indexed voter, bool support, uint256 voterTokens);
     event ProposalExecuted(uint256 indexed proposalId, bool success);
 
-    // Modifiers
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
-        _;
-    }
-
-    modifier onlyMember() {
-        require(members[msg.sender], "Only members can call this function");
-        _;
-    }
-
-    constructor() {
-        owner = msg.sender;
-        members[msg.sender] = true;
-        memberTokens[msg.sender] = 1000 * 10**18; // Initial tokens for owner
+    Initial tokens for owner
         proposalCount = 0;
     }
 
@@ -124,7 +97,7 @@ contract SimpleDAO {
 
     /**
      * @dev Execute proposal if voting deadline has passed and not executed yet
-     * Note: This example does not implement proposal actions — placeholder for extension
+     * Note: This example does not implement proposal actions ? placeholder for extension
      * @param _proposalId The ID of the proposal to execute
      */
     function executeProposal(uint256 _proposalId) external onlyMember {
@@ -138,62 +111,12 @@ contract SimpleDAO {
 
         bool success = proposal.votesFor > proposal.votesAgainst;
 
-        // Placeholder for executing proposal actions based on result
-        // For example: transfer funds, modify state, etc.
-        // This contract does not implement specific actions.
-
-        emit ProposalExecuted(_proposalId, success);
-    }
-
-    /**
-     * @dev Get proposal details
-     * @param _proposalId The ID of the proposal
-     */
-    function getProposal(uint256 _proposalId)
-        external
-        view
-        returns (
-            uint256 id,
-            address proposer,
-            string memory description,
-            uint256 votesFor,
-            uint256 votesAgainst,
-            uint256 deadline,
-            bool executed
-        )
-    {
-        require(_proposalId > 0 && _proposalId <= proposalCount, "Invalid proposal ID");
-
-        Proposal storage proposal = proposals[_proposalId];
-        return (
-            proposal.id,
-            proposal.proposer,
-            proposal.description,
-            proposal.votesFor,
-            proposal.votesAgainst,
-            proposal.deadline,
-            proposal.executed
-        );
-    }
-
-    /**
-     * @dev Check if an address has voted on a proposal
-     */
-    function hasVoted(uint256 _proposalId, address _voter) external view returns (bool) {
-        require(_proposalId > 0 && _proposalId <= proposalCount, "Invalid proposal ID");
-
-        return proposals[_proposalId].hasVoted[_voter];
-    }
-
-    /**
-     * @dev Get contract balance (treasury)
-     */
-    function getTreasuryBalance() external view returns (uint256) {
-        return address(this).balance;
-    }
-
-    // Receive function to accept ETH sent directly
+        For example: transfer funds, modify state, etc.
+        Receive function to accept ETH sent directly
     receive() external payable {
         emit FundsDeposited(msg.sender, msg.value);
     }
 }
+// 
+End
+// 
