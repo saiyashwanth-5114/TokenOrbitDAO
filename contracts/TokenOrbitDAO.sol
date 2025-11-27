@@ -1,122 +1,241 @@
-Struct to represent a proposal
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+/**
+ * @title TokenOrbitDAO
+ * @dev Minimal token-weighted DAO for proposals and voting
+ * @notice Voting power is proportional to ERC20 token balance at voting time
+ */
+interface IERC20 {
+    function balanceOf(address account) external view returns (uint256);
+}
+
+contract TokenOrbitDAO {
+    IERC20 public governanceToken;
+    address public owner;
+
+    uint256 public proposalCount;
+    uint256 public votingPeriod;  // in seconds
+    uint256 public quorum;        // minimum total votes (in token units) to be valid
+
     struct Proposal {
         uint256 id;
         address proposer;
-        string description;
-        uint256 votesFor;
-        uint256 votesAgainst;
+        string  title;
+        string  description;
+        uint256 createdAt;
         uint256 deadline;
-        bool executed;
-        mapping(address => bool) hasVoted;
+        uint256 forVotes;
+        uint256 againstVotes;
+        bool    executed;
+        bool    canceled;
     }
 
-    Member token balances
-    mapping(address => uint256) public memberTokens;
+    // proposalId => Proposal
+    mapping(uint256 => Proposal) public proposals;
 
-    Events
-    event TokensAllocated(address indexed member, uint256 tokens);
-    event FundsDeposited(address indexed sender, uint256 amount);
-    event ProposalCreated(uint256 indexed proposalId, address indexed proposer, string description, uint256 deadline);
-    event Voted(uint256 indexed proposalId, address indexed voter, bool support, uint256 voterTokens);
-    event ProposalExecuted(uint256 indexed proposalId, bool success);
+    // proposalId => voter => hasVoted
+    mapping(uint256 => mapping(address => bool)) public hasVoted;
 
-    Initial tokens for owner
-        proposalCount = 0;
+    event ProposalCreated(
+        uint256 indexed id,
+        address indexed proposer,
+        string title,
+        uint256 createdAt,
+        uint256 deadline
+    );
+
+    event VoteCast(
+        uint256 indexed id,
+        address indexed voter,
+        bool support,
+        uint256 weight
+    );
+
+    event ProposalExecuted(uint256 indexed id, bool passed);
+    event ProposalCanceled(uint256 indexed id);
+    event ParamsUpdated(uint256 votingPeriod, uint256 quorum);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
     }
 
-    /**
-     * @dev Add a new member to the DAO
-     * @param _member Address of the new member
-     * @param _tokens Initial token allocation
-     */
-    function addMember(address _member, uint256 _tokens) external onlyOwner {
-        require(_member != address(0), "Invalid address");
-        require(!members[_member], "Already a member");
-
-        members[_member] = true;
-        memberTokens[_member] = _tokens;
-
-        emit TokensAllocated(_member, _tokens);
+    modifier proposalExists(uint256 id) {
+        require(proposals[id].proposer != address(0), "Proposal not found");
+        _;
     }
 
-    /**
-     * @dev Deposit funds to DAO treasury
-     */
-    function depositFunds() external payable {
-        require(msg.value > 0, "Must send ETH");
-        emit FundsDeposited(msg.sender, msg.value);
+    constructor(
+        address _token,
+        uint256 _votingPeriod,
+        uint256 _quorum
+    ) {
+        require(_token != address(0), "Zero token");
+        require(_votingPeriod > 0, "votingPeriod = 0");
+
+        governanceToken = IERC20(_token);
+        owner = msg.sender;
+        votingPeriod = _votingPeriod;
+        quorum = _quorum;
     }
 
     /**
      * @dev Create a new proposal
-     * @param _description Description of the proposal
-     * @param _votingPeriod Duration in seconds for voting period
+     * @param title Short title
+     * @param description Long-form description or IPFS link
      */
-    function createProposal(string memory _description, uint256 _votingPeriod) external onlyMember returns (uint256) {
-        require(bytes(_description).length > 0, "Description required");
-        require(_votingPeriod > 0, "Voting period must be positive");
+    function createProposal(
+        string calldata title,
+        string calldata description
+    ) external returns (uint256 id) {
+        id = proposalCount;
+        proposalCount += 1;
 
-        proposalCount++;
-        Proposal storage p = proposals[proposalCount];
-        p.id = proposalCount;
-        p.proposer = msg.sender;
-        p.description = _description;
-        p.deadline = block.timestamp + _votingPeriod;
-        p.executed = false;
+        proposals[id] = Proposal({
+            id: id,
+            proposer: msg.sender,
+            title: title,
+            description: description,
+            createdAt: block.timestamp,
+            deadline: block.timestamp + votingPeriod,
+            forVotes: 0,
+            againstVotes: 0,
+            executed: false,
+            canceled: false
+        });
 
-        emit ProposalCreated(proposalCount, msg.sender, _description, p.deadline);
-
-        return proposalCount;
+        emit ProposalCreated(
+            id,
+            msg.sender,
+            title,
+            block.timestamp,
+            block.timestamp + votingPeriod
+        );
     }
 
     /**
-     * @dev Vote on an active proposal
-     * @param _proposalId ID of the proposal
-     * @param _support True for vote in favor, false for vote against
+     * @dev Cast a vote on a proposal
+     * @param id Proposal id
+     * @param support True = vote for, False = vote against
      */
-    function vote(uint256 _proposalId, bool _support) external onlyMember {
-        require(_proposalId > 0 && _proposalId <= proposalCount, "Invalid proposal ID");
+    function vote(uint256 id, bool support)
+        external
+        proposalExists(id)
+    {
+        Proposal storage p = proposals[id];
 
-        Proposal storage proposal = proposals[_proposalId];
-        require(block.timestamp <= proposal.deadline, "Voting period over");
-        require(!proposal.hasVoted[msg.sender], "Already voted");
+        require(block.timestamp < p.deadline, "Voting ended");
+        require(!p.canceled, "Proposal canceled");
+        require(!p.executed, "Proposal executed");
+        require(!hasVoted[id][msg.sender], "Already voted");
 
-        uint256 voterTokens = memberTokens[msg.sender];
-        require(voterTokens > 0, "No tokens to vote with");
+        uint256 weight = governanceToken.balanceOf(msg.sender);
+        require(weight > 0, "No voting power");
 
-        proposal.hasVoted[msg.sender] = true;
+        hasVoted[id][msg.sender] = true;
 
-        if (_support) {
-            proposal.votesFor += voterTokens;
+        if (support) {
+            p.forVotes += weight;
         } else {
-            proposal.votesAgainst += voterTokens;
+            p.againstVotes += weight;
         }
 
-        emit Voted(_proposalId, msg.sender, _support, voterTokens);
+        emit VoteCast(id, msg.sender, support, weight);
     }
 
     /**
-     * @dev Execute proposal if voting deadline has passed and not executed yet
-     * Note: This example does not implement proposal actions ? placeholder for extension
-     * @param _proposalId The ID of the proposal to execute
+     * @dev Execute a proposal after voting period
+     * In this minimal version, "execution" just records whether it passed.
      */
-    function executeProposal(uint256 _proposalId) external onlyMember {
-        require(_proposalId > 0 && _proposalId <= proposalCount, "Invalid proposal ID");
+    function executeProposal(uint256 id)
+        external
+        proposalExists(id)
+    {
+        Proposal storage p = proposals[id];
 
-        Proposal storage proposal = proposals[_proposalId];
-        require(block.timestamp > proposal.deadline, "Voting still ongoing");
-        require(!proposal.executed, "Proposal already executed");
+        require(block.timestamp >= p.deadline, "Voting not ended");
+        require(!p.executed, "Already executed");
+        require(!p.canceled, "Proposal canceled");
 
-        proposal.executed = true;
+        uint256 totalVotes = p.forVotes + p.againstVotes;
+        bool passed = totalVotes >= quorum && p.forVotes > p.againstVotes;
 
-        bool success = proposal.votesFor > proposal.votesAgainst;
+        p.executed = true;
 
-        For example: transfer funds, modify state, etc.
-        Receive function to accept ETH sent directly
-    receive() external payable {
-        emit FundsDeposited(msg.sender, msg.value);
+        emit ProposalExecuted(id, passed);
+    }
+
+    /**
+     * @dev Cancel a proposal (only proposer or owner)
+     */
+    function cancelProposal(uint256 id)
+        external
+        proposalExists(id)
+    {
+        Proposal storage p = proposals[id];
+        require(!p.executed, "Already executed");
+        require(!p.canceled, "Already canceled");
+        require(msg.sender == p.proposer || msg.sender == owner, "Not authorized");
+
+        p.canceled = true;
+        emit ProposalCanceled(id);
+    }
+
+    /**
+     * @dev Update DAO parameters
+     */
+    function updateParams(uint256 _votingPeriod, uint256 _quorum)
+        external
+        onlyOwner
+    {
+        require(_votingPeriod > 0, "votingPeriod = 0");
+        votingPeriod = _votingPeriod;
+        quorum = _quorum;
+        emit ParamsUpdated(_votingPeriod, _quorum);
+    }
+
+    /**
+     * @dev Transfer ownership of DAO admin functions
+     */
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Zero address");
+        address prev = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(prev, newOwner);
+    }
+
+    /**
+     * @dev Helper: get basic proposal info
+     */
+    function getProposal(uint256 id)
+        external
+        view
+        proposalExists(id)
+        returns (
+            address proposer,
+            string memory title,
+            string memory description,
+            uint256 createdAt,
+            uint256 deadline,
+            uint256 forVotes,
+            uint256 againstVotes,
+            bool executed,
+            bool canceled
+        )
+    {
+        Proposal memory p = proposals[id];
+        return (
+            p.proposer,
+            p.title,
+            p.description,
+            p.createdAt,
+            p.deadline,
+            p.forVotes,
+            p.againstVotes,
+            p.executed,
+            p.canceled
+        );
     }
 }
-// 
-End
-// 
